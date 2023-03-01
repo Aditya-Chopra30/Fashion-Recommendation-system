@@ -1,0 +1,320 @@
+!pip install -q kaggle
+from google.colab import drive
+drive.mount('/content/drive')
+from google.colab import files
+files.upload()
+
+import gc 
+gc.collect()
+
+!mkdir ~/.kaggle
+!cp kaggle.json ~/.kaggle/
+     
+
+!chmod 600 /root/.kaggle/kaggle.json
+     
+
+! kaggle datasets download -d paramaggarwal/fashion-product-images-dataset
+
+
+! mkdir dataset
+!unzip fashion-product-images-dataset.zip -d dataset
+
+import numpy as np
+import pandas as pd
+import os 
+import tensorflow as tf
+import tensorflow.keras as keras
+from keras import Model
+from keras.applications import DenseNet121
+from keras.applications import vgg16
+from keras.preprocessing import image
+from keras.applications.densenet import preprocess_input, decode_predictions
+from keras.layers import GlobalMaxPooling2D
+from keras.utils import plot_model
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import cv2
+import pathlib
+from sklearn.metrics.pairwise import linear_kernel
+     
+
+path = '/content/dataset/fashion-dataset/fashion-dataset/'
+dataset_path = pathlib.Path(path)
+images=os.listdir(dataset_path)
+images
+
+plt.figure(figsize=(20,20))
+for i in range(20,30):
+    plt.subplot(6, 10, i-10+1)
+    cloth_img =  mpimg.imread(path + 'images/100'+ str(i) +'.jpg')
+    plt.imshow(cloth_img)
+plt.subplots_adjust(wspace=-0.5, hspace=1)
+plt.show()
+
+df = pd.read_csv(path + "styles.csv",nrows=6000,error_bad_lines=False)
+df['image'] = df.apply(lambda x: str(x['id']) + ".jpg", axis=1)
+print(df.shape)
+df.head(5)
+
+plt.figure(figsize=(7,20))
+df.articleType.value_counts().sort_values().plot(kind='barh')
+
+img_width, img_height, chnl = 200, 200, 3
+     
+
+#VGG16
+from tensorflow.keras.applications import VGG16
+vgg=VGG16(include_top=False,weights='imagenet',input_shape=(img_width, img_height, chnl))
+vgg.trainable=False
+model1 = keras.Sequential([vgg,GlobalMaxPooling2D()])
+model1.summary()
+
+#DenseNet121
+densenet = DenseNet121(include_top=False, weights='imagenet', input_shape=(img_width, img_height, chnl))
+densenet.trainable = False
+
+model2 = keras.Sequential([densenet,GlobalMaxPooling2D()])
+
+model2.summary()
+
+
+#Resnet50
+from keras.applications.resnet50 import ResNet50
+resnet = ResNet50(weights='imagenet', include_top=False, input_shape = (img_width, img_height, chnl))
+resnet.trainable = False
+model3 = keras.Sequential([resnet,GlobalMaxPooling2D()])
+
+model3.summary()
+
+def img_path(img):
+    return path + 'images/' + img
+def model_predict(model, img_name):
+    # Reshape
+    img = image.load_img(img_path(img_name), target_size=(img_width, img_height))
+    # img to Array
+    x   = image.img_to_array(img)
+    # Expand Dim (1, w, h)
+    x   = np.expand_dims(x, axis=0)
+    # Pre process Input
+    x   = preprocess_input(x)
+    return model.predict(x).reshape(-1)
+
+df_copy1      = df
+df_embedding1 = df_copy1['image'].apply(lambda x: model_predict(model1, x))
+df_embedding1 = df_embedding1.apply(pd.Series)
+df_embedding1.head(5)
+
+df_copy2      = df
+df_embedding2 = df_copy2['image'].apply(lambda x: model_predict(model2, x))
+df_embedding2 = df_embedding2.apply(pd.Series)
+df_embedding2.head(5)
+
+df_copy3     = df
+df_embedding3 = df_copy3['image'].apply(lambda x: model_predict(model3, x))
+df_embedding3 = df_embedding3.apply(pd.Series)
+df_embedding3.head(5)
+
+print(df_embedding1.shape) #VGG16
+print(df_embedding2.shape) #Densenet121
+print(df_embedding3.shape) #Resnet50
+
+url="/content/s1.jpg"
+     
+
+a = plt.imread(url)
+plt.imshow(a)
+
+
+def model_predict(model, url):
+     # Reshape
+     img = image.load_img(url, target_size=(img_width, img_height))
+     # img to Array
+     x   = image.img_to_array(img)
+     # Expand Dim (1, w, h)
+     x   = np.expand_dims(x, axis=0)
+     # Pre process Input
+     x   = preprocess_input(x)
+     return model.predict(x)
+     
+
+df_vgg=model_predict(model1, url)
+df_dn=model_predict(model2, url)
+df_rn=model_predict(model3, url)
+     
+
+print(df_vgg)
+print(df_vgg.shape)
+print(df_dn)
+print(df_dn.shape)
+print(df_rn)
+print(df_rn.shape)
+
+df_vgg = pd.DataFrame(df_vgg)  
+print(df_vgg)
+df_dn = pd.DataFrame(df_dn)  
+print(df_dn)
+df_rn = pd.DataFrame(df_rn)  
+print(df_rn)
+
+cosine_sim1 = linear_kernel(df_vgg, df_embedding1)
+print(cosine_sim1[0])
+cosine_sim2 = linear_kernel(df_dn, df_embedding2)
+print(cosine_sim2[0])
+cosine_sim3 = linear_kernel(df_rn, df_embedding3)
+print(cosine_sim3[0])
+
+def range_cs(cosine_sim):
+  x_min=cosine_sim.min(axis=1)
+  x_max=cosine_sim.max(axis=1)
+  norm=(cosine_sim-x_min)/(x_max-x_min)[:, np.newaxis]
+  return norm
+     
+
+vgg_norm=range_cs(cosine_sim1)
+dn_norm=range_cs(cosine_sim2)
+rn_norm=range_cs(cosine_sim3)
+     
+
+def get_recommendations(x, df, cosine_sim):
+    #idx = indices[index]
+
+    # Get the pairwsie similarity scores of all clothes with that one
+    sim_scores = list(enumerate(cosine_sim[x]))
+    
+    # Sort the clothes based on the similarity scores
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    
+    # Get the scores of the 5 most similar clothes
+    sim_scores = sim_scores[0:5]
+    print(sim_scores)
+    # Get the clothes indices
+    cloth_indices = [i[0] for i in sim_scores]
+
+    # Return the top 5 most similar products
+    return df['image'].iloc[cloth_indices]
+     
+
+chosen_img_indx = 0
+
+recommendation = get_recommendations(chosen_img_indx, df, vgg_norm)
+recommendation_list = recommendation.to_list()
+#recommended images
+plt.figure(figsize=(20,20))
+j=0
+for i in recommendation_list:
+    plt.subplot(6, 10, j+1)
+    cloth_img =  mpimg.imread(path + 'images/'+ i)
+    plt.imshow(cloth_img)
+    plt.axis("off")
+    j+=1
+plt.title("Vgg16 recommended images",loc='left')
+plt.subplots_adjust(wspace=-0.5, hspace=1)
+plt.show()
+
+recommendation = get_recommendations(chosen_img_indx, df, dn_norm)
+recommendation_list = recommendation.to_list()
+#recommended images
+plt.figure(figsize=(20,20))
+j=0
+for i in recommendation_list:
+    plt.subplot(6, 10, j+1)
+    cloth_img =  mpimg.imread(path + 'images/'+ i)
+    plt.imshow(cloth_img)
+    plt.axis("off")
+    j+=1
+plt.title(" Densenet121 recommended images",loc='left')
+plt.subplots_adjust(wspace=-0.5, hspace=1)
+plt.show()
+
+recommendation = get_recommendations(chosen_img_indx, df, rn_norm)
+recommendation_list = recommendation.to_list()
+#recommended images
+plt.figure(figsize=(20,20))
+j=0
+for i in recommendation_list:
+    plt.subplot(6, 10, j+1)
+    cloth_img =  mpimg.imread(path + 'images/'+ i)
+    plt.imshow(cloth_img)
+    plt.axis("off")
+    j+=1
+plt.title("Resnet50 recommended images",loc='left')
+plt.subplots_adjust(wspace=-0.5, hspace=1)
+plt.show()
+
+from sklearn.manifold import TSNE
+import time
+import seaborn as sns
+     
+
+time_start = time.time()
+tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300)
+
+     
+
+tsne_results1 = tsne.fit_transform(df_embedding1)
+print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+
+df['tsne-2d-one'] = tsne_results1[:,0]
+df['tsne-2d-two'] = tsne_results1[:,1]
+     
+
+plt.figure(figsize=(16,10))
+sns.scatterplot(x="tsne-2d-one", y="tsne-2d-two",
+                hue="masterCategory",
+                data=df,
+                legend="full",
+                alpha=0.8)
+
+plt.figure(figsize=(16,10))
+sns.scatterplot(x="tsne-2d-one", y="tsne-2d-two",
+                hue="subCategory",
+                data=df,
+                legend="full",
+                alpha=0.8)
+
+
+tsne_results2 = tsne.fit_transform(df_embedding2)
+print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+
+df['tsne-2d-one'] = tsne_results2[:,0]
+df['tsne-2d-two'] = tsne_results2[:,1]
+     
+
+plt.figure(figsize=(16,10))
+sns.scatterplot(x="tsne-2d-one", y="tsne-2d-two",
+                hue="masterCategory",
+                data=df,
+                legend="full",
+                alpha=0.8)
+plt.figure(figsize=(16,10))
+sns.scatterplot(x="tsne-2d-one", y="tsne-2d-two",
+                hue="subCategory",
+                data=df,
+                legend="full",
+                alpha=0.8)
+
+tsne_results3 = tsne.fit_transform(df_embedding3)
+print('t-SNE done! Time elapsed: {} seconds'.format(time.time()-time_start))
+
+df['tsne-2d-one'] = tsne_results3[:,0]
+df['tsne-2d-two'] = tsne_results3[:,1]
+     
+
+plt.figure(figsize=(16,10))
+sns.scatterplot(x="tsne-2d-one", y="tsne-2d-two",
+                hue="masterCategory",
+                data=df,
+                legend="full",
+                alpha=0.8)
+
+plt.figure(figsize=(16,10))
+sns.scatterplot(x="tsne-2d-one", y="tsne-2d-two",
+                hue="subCategory",
+                data=df,
+                legend="full",
+                alpha=0.8)
+
+df_embedding1.to_csv('embedding_vgg.csv')
+df_embedding2.to_csv('embedding_dn.csv')
+df_embedding3.to_csv('embedding_rn.csv')
